@@ -1,54 +1,52 @@
 import streamlit as st
-import numpy as np
+import tempfile
+from moviepy import VideoFileClip
+import os
+from image_emotion_processing.emotion_image import predict_emotion_from_frame
+from audio_emotion_processing.emotion_audio import predict_emotion_from_audio
+from video_emotion_processing import predict_emotion_from_video
+from fusion_logic import decision
+# from fusion_logic import fuzzy_decision_sf
 import cv2
-from PIL import Image
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import img_to_array
 
-# Load model
-model = load_model('cnn_model_latest.weights.h5')  # ganti nama file jika perlu
+st.title("🎥 Fuzzy Emotion Prediction from Video")
 
-# Label emosi
-class_names = ['angry', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+uploaded_file = st.file_uploader("Upload video file", type=["mp4", "avi", "mov"])
 
-# Fungsi preprocessing gambar
-def preprocess_image(image):
-    image = image.convert('L')  # grayscale
-    image = image.resize((48, 48))
-    image = img_to_array(image)
-    image = image / 255.0
-    image = np.expand_dims(image, axis=0)
-    return image
+if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
+        temp_video.write(uploaded_file.read())
+        temp_video_path = temp_video.name
 
-# Prediksi dari gambar
-def predict_emotion(image):
-    processed = preprocess_image(image)
-    prediction = model.predict(processed)[0]
-    predicted_class = class_names[np.argmax(prediction)]
-    confidence = np.max(prediction)
-    return predicted_class, confidence
+    st.video(uploaded_file)
 
-# Title
-st.title("Facial Emotion Recognition")
+    if st.button("🔍 Analyze Emotion"):
+        # ✅ Gunakan analisis seluruh frame
+        st.info("🔄 Analyzing video frames, please wait...")
+        emotion_img, score_img, emotion_dist = predict_emotion_from_video(temp_video_path)
 
-# Pilihan mode input
-mode = st.radio("Pilih metode input gambar:", ["📸 Kamera Langsung", "🖼️ Upload Gambar"])
+        # Ekstrak audio
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio:
+            clip = VideoFileClip(temp_video_path)
+            audio_path = temp_audio.name
+            clip.audio.write_audiofile(audio_path, logger=None)
+            clip.close() 
+        emotion_audio, score_audio = predict_emotion_from_audio(audio_path)
 
-# Kamera langsung
-if mode == "📸 Kamera Langsung":
-    camera_image = st.camera_input("Ambil gambar wajah")
-    if camera_image is not None:
-        img = Image.open(camera_image)
-        st.image(img, caption="Gambar dari kamera", use_column_width=True)
-        label, conf = predict_emotion(img)
-        st.success(f"Prediksi Emosi: **{label.upper()}** ({conf:.2%})")
+        # Gabungkan 
+        final_emotion = decision(emotion_img, score_img, emotion_audio, score_audio)
 
-# Upload gambar
-elif mode == "🖼️ Upload Gambar":
-    uploaded = st.file_uploader("Unggah gambar wajah", type=["jpg", "png", "jpeg"])
-    if uploaded is not None:
-        img = Image.open(uploaded)
-        st.image(img, caption="Gambar yang diunggah", use_column_width=True)
-        label, conf = predict_emotion(img)
-        st.success(f"Prediksi Emosi: **{label.upper()}** ({conf:.2%})")
+        # Tampilkan hasil
+        st.subheader("📊 Prediction Result")
+        st.write(f"🖼️ Image-based Emotion: **{emotion_img}** ({score_img:.2f})")
+        for emo, count in emotion_dist.items():
+            st.write(f"**{emo}**: {count}")
+        st.write(f"🔊 Audio-based Emotion: **{emotion_audio}** ({score_audio:.2f})")
+        st.markdown("---")
+        st.success(f"🎯 Final Emotion (if-else): **{final_emotion}**")
+        # hasil = fuzzy_decision_sf(score_img_val=0.83, score_audio_val=0.78)
+        # st.success(f"🎯 Final Emotion: **{hasil}**")
+
+
+        os.remove(audio_path)
+        os.remove(temp_video_path)
